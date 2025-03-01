@@ -4,6 +4,7 @@ import numpy as np
 from jumanji import specs
 from jumanji.env import Environment
 from jumanji.types import TimeStep, restart, transition, termination
+from dataclasses import dataclass
 
 class HetNetEnvironment(Environment):
     """Enhanced Jumanji environment for HetNet Resource Allocation with improved realism."""

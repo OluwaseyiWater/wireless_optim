@@ -1,16 +1,35 @@
 from wireless_optim.environment import *
 from train.PPO_training import *
 from train.D3QN_training import *
+from plot import *
+import pickle
+import numpy as np
 
 def main():
+    with open('train_models/ppo_params.pkl', 'rb') as f:
+        ppo_params = pickle.load(f)
+    with open('train_models/d3qn_params.pkl', 'rb') as f:
+        d3qn_params = pickle.load(f)
+    with open('train_models/d3qn_agent.pkl', 'rb') as f:
+        d3qn_agent = pickle.load(f)
+    with open('train_models/env_ppo.pkl', 'rb') as f:
+        ppo_env = pickle.load(f)
+    with open('train_models/env_d3qn.pkl', 'rb') as f:
+        d3qn_env = pickle.load(f)
+    with open('train_models/train_models/d3qn_params.pkl', 'rb') as f:
+        d3qn_params = pickle.load(f)
+
+    env_ppo = HetNetEnvironment(**ppo_env)
+    env_d3qn = HetNetEnvironment(**d3qn_env)
+
      # Enhanced Evaluation.
     print("\nEvaluating PPO...")
-    ppo_eval = evaluate_agent(env, ppo_params, is_ppo=True)
+    ppo_eval = evaluate_agent(env_ppo, ppo_params, is_ppo=True)
     print(f"PPO Average Reward: {np.mean(ppo_eval.episode_rewards):.2f}")
     
     print("\nEvaluating D3QN...")
     # For D3QN, pass the agent's network to ensure matching architecture.
-    d3qn_eval = evaluate_agent(env, d3qn_agent.params, is_ppo=False, network=d3qn_agent.net)
+    d3qn_eval = evaluate_agent(env_d3qn, d3qn_agent.params, is_ppo=False, network=d3qn_agent.net)
     print(f"D3QN Average Reward: {np.mean(d3qn_eval.episode_rewards):.2f}")
     
     # Visualization.
