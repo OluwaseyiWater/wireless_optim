@@ -1,4 +1,4 @@
-from wireless_optim import *
+from wireless_optim.environment import *
 from models.PPO import ppo_train
 import argparse
 import jax.numpy as jnp
