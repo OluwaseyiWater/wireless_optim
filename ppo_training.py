@@ -1,7 +1,8 @@
 from wireless_optim import *
-from model import ppo_train
+from models.PPO import ppo_train
 import argparse
 import jax.numpy as jnp
+import pickle
 
 # parse from terminal input
 parser = argparse.ArgumentParser()
@@ -68,25 +69,28 @@ def main():
     print("PPO training completed.")
     
     # Save PPO parameters and network to .pkl files
-    with open('ppo_params.pkl', 'wb') as f:
+    with open('train_models/ppo_params.pkl', 'wb') as f:
         pickle.dump(ppo_params, f)
-    with open('ppo_net.pkl', 'wb') as f:
+    with open('train_models/ppo_net.pkl', 'wb') as f:
         pickle.dump(ppo_net, f)
-    with open('ppo_rewards.pkl', 'wb') as f:
+    with open('train_models/ppo_rewards.pkl', 'wb') as f:
         pickle.dump(ppo_rewards, f)
-    with open('ppo_losses.pkl', 'wb') as f:
+    with open('train_models/ppo_losses.pkl', 'wb') as f:
         pickle.dump(ppo_losses, f)
 
     print("PPO parameters and network saved to .pkl files.")
     
     #save config parameters to .pkl file
-    with open('ppo_config.pkl', 'wb') as f:
+    with open('train_models/ppo_config.pkl', 'wb') as f:
         pickle.dump(ppo_config, f)
     print("PPO config parameters saved to .pkl file.")
 
     #save environmnet arguments to .pkl file
-    with open('ppo_env_args.pkl', 'wb') as f:
-        pickle.dump(args, f)
+    with open('train_models/env_ppo.pkl', 'wb') as f:
+        ppo_config = {'num_macro_bs': num_macro_bs, 'num_small_bs': num_small_bs,
+         'num_users': num_users, 'max_steps': max_steps, 'seed': env_seed}
+        pickle.dump(ppo_config, f)
+
     print("PPO environment arguments saved to .pkl file.")
 
 
