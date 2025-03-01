@@ -1,3 +1,5 @@
 jumanji
-jax
-jaxlib
+jax==0.4.14 
+jaxlib==0.4.14
+haiku
+optax
