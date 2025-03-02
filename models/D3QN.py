@@ -10,6 +10,7 @@ import os
 from utils import unflatten_action
 
 from wireless_optim.environment import *
+from .PPO import *
 
 class ReplayBuffer:
     def __init__(self, capacity: int):
@@ -119,6 +120,7 @@ def train_d3qn(env, num_episodes=100, batch_size=64, replay_capacity=10000, seed
         print(f"D3QN Episode {episode}: Total Reward = {ep_reward:.2f}")
     
     return agent, episode_rewards
+
 
 # -------------------------
 # Enhanced Evaluation with Trajectory Visualization

@@ -33,4 +33,7 @@ def main():
         plt.legend()
         plt.savefig("plots/ppo_loss_over_training.png")
         plt.close()
+
+if __name__ == "__main__":
+    main()
     

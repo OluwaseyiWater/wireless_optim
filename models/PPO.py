@@ -26,7 +26,7 @@ from wireless_optim.environment import HetNetEnvironment, Transition
 #     one_hot = one_hot.at[index].set(1.0)
 #     return one_hot.reshape(shape)
 
-# -------------------------
+# -------------------------ppo_train
 # PPO Implementation (Training)
 # -------------------------
 def compute_gae(rewards, values, dones, gamma, lam):
@@ -134,6 +134,11 @@ def ppo_train(env, config,seed=0):
 
     return params, ppo_net, epoch_rewards, epoch_losses
 
+def ppo_agent(config):
+    env = HetNetEnvironment(**config)
+    obs = env.reset().observation
+    
+    return agent
 # -------------------------
 # D3QN Implementation (Training)
 # -------------------------

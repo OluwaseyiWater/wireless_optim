@@ -60,7 +60,7 @@ def plot_terrain(env: HetNetEnvironment,
     plt.ylabel("Y Coordinate")
     plt.legend()
     plt.grid(True)
-    plt.savefig(f'terrain_episode_{episode}.png')
+    plt.savefig(f'plots/terrain_episode_{episode}.png')
     plt.close()
 
 
@@ -81,7 +81,7 @@ def plot_action_distribution(ppo_actions: List[jnp.ndarray],
     plt.ylabel("Count")
     plt.xticks([0, 1, 2], ['Power Down', 'Maintain', 'Power Up'])
     plt.legend()
-    plt.savefig('action_distribution.png')
+    plt.savefig('plots/action_distribution.png')
     plt.close()
 
 
@@ -104,5 +104,5 @@ def plot_metrics_comparison(ppo_metrics: Dict, d3qn_metrics: Dict):
     axs[1].legend()
     
     plt.tight_layout()
-    plt.savefig('metrics_comparison.png')
+    plt.savefig('plots/metrics_comparison.png')
     plt.close()
