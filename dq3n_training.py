@@ -13,8 +13,8 @@ parser.add_argument("--num_users", type=int, default=50)
 parser.add_argument("--max_steps", type=int, default=100)
 parser.add_argument("--train_seed", type=int, default=0)
 parser.add_argument("--num_episodes", type=int, default=5)
-parser.add_argument("--batch_size", type=int, default=64)
-parser.add_argument("--replay_capacity", type=int, default=10000)
+parser.add_argument("--batch_size", type=int, default=1000)
+parser.add_argument("--replay_capacity", type=int, default=100000)
 
 args = parser.parse_args()
 num_macro_bs = args.num_macro_bs
@@ -31,7 +31,7 @@ def main():
                     num_users=num_users, max_steps=max_steps)
 
     print("\nStarting D3QN training...")
-    d3qn_agent, d3qn_rewards = train_d3qn(env, num_episodes=num_episodes, 
+    d3qn_agent, d3qn_rewards, d3qn_losses = train_d3qn(env, num_episodes=num_episodes, 
                 batch_size=batch_size, replay_capacity=replay_capacity
                 ,seed=train_seed)
     print("D3QN training completed.")

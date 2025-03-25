@@ -43,8 +43,10 @@ class D3QN:
         
         def q_network(x):
             hidden = hk.Sequential([
+                hk.Linear(128), jax.nn.relu,
                 hk.Linear(64), jax.nn.relu,
-                hk.Linear(64), jax.nn.relu,
+                hk.Linear(32), jax.nn.relu,
+                hk.Linear(32), jax.nn.relu,
             ])(x)
             value = hk.Linear(1)(hidden)
             advantages = hk.Linear(self.action_dim)(hidden)
@@ -77,16 +79,18 @@ class D3QN:
     def update_target_network(self):
         self.target_params = self.params
 
-def train_d3qn(env, num_episodes=100, batch_size=64, replay_capacity=10000, seed=0):
+def train_d3qn(env, num_episodes=100, batch_size=1000, replay_capacity=10000, seed=0):
     agent = D3QN(env)
     replay_buffer = ReplayBuffer(capacity=replay_capacity)
     key = jax.random.PRNGKey(seed)
     episode_rewards = []
+    episodes_losses = []
     
     for episode in range(num_episodes):
         key, reset_key = jax.random.split(key)
         state = env.reset(reset_key)
         ep_reward = 0.0
+        ep_loss = 0.0
         
         while state.discount != 0:
             key, action_key = jax.random.split(key)
@@ -116,10 +120,12 @@ def train_d3qn(env, num_episodes=100, batch_size=64, replay_capacity=10000, seed
                 batch = replay_buffer.sample(batch_size, sample_key)
                 loss = agent.update(batch)
                 agent.update_target_network()
+                ep_loss += loss
         episode_rewards.append(ep_reward)
-        print(f"D3QN Episode {episode}: Total Reward = {ep_reward:.2f}")
+        episodes_losses.append(ep_loss)
+        print(f"D3QN Episode {episode}: Total Reward = {ep_reward:.2f}, Loss = {ep_loss:.4f}")
     
-    return agent, episode_rewards
+    return agent, episode_rewards, episodes_losses
 
 
 # -------------------------

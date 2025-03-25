@@ -13,7 +13,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--num_macro_bs', type=int, default=3)
 parser.add_argument('--num_small_bs', type=int, default=10)
 parser.add_argument('--num_users', type=int, default=50)
-parser.add_argument('--max_steps', type=int, default=100)
+parser.add_argument('--max_steps', type=int, default=1000)
 parser.add_argument('--train_seed', type=int, default=42)
 parser.add_argument('--num_episodes', type=int, default=1000)
 parser.add_argument('--num_steps_per_episode', type=int, default=100)
@@ -21,9 +21,13 @@ parser.add_argument('--gamma', type=float, default=0.99)
 parser.add_argument('--lr', type=float, default=3e-4)
 parser.add_argument('--hidden_size', type=int, default=64)
 parser.add_argument('--num_epochs', type=int, default=10)
-parser.add_argument('--num_steps', type=int, default=50)
+parser.add_argument('--num_steps', type=int, default=4096)
 parser.add_argument('--gae_lambda', type=float, default=0.95)
 parser.add_argument('--update_epochs', type=int, default=4)
+parser.add_argument('--clip_coef', type=float, default=0.2)
+parser.add_argument('--ent_coef', type=float, default=0.05)
+parser.add_argument('--vf_coef', type=float, default=0.1)
+parser.add_argument('--max_grad_norm', type=float, default=0.3)
 
 
 args = parser.parse_args()
@@ -41,6 +45,10 @@ num_epochs = args.num_epochs
 num_steps = args.num_steps
 gae_lambda = args.gae_lambda
 update_epochs = args.update_epochs
+clip_coef = args.clip_coef
+ent_coef = args.ent_coef
+vf_coef = args.vf_coef
+max_grad_norm = args.max_grad_norm
 
 
 def main():
@@ -57,10 +65,10 @@ def main():
         'anneal_lr': True,
         'gamma': gamma,
         'gae_lambda': gae_lambda,
-        'clip_coef': 0.2,
-        'ent_coef': 0.01,
-        'vf_coef': 0.5,
-        'max_grad_norm': 0.5,
+        'clip_coef': clip_coef,
+        'ent_coef': ent_coef,
+        'vf_coef': vf_coef,
+        'max_grad_norm': max_grad_norm,
         'update_epochs': update_epochs,
         'hidden_size': hidden_size,
        

@@ -1,0 +1,7 @@
+Metadata-Version: 2.1
+Name: purejaxrl
+Version: 0.1.0
+Summary: Really Fast End-to-End JAX RL Implementations
+Home-page: https://github.com/luchris429/purejaxrl
+Author: luchris429
+Requires-Python: >=3.8

@@ -139,33 +139,57 @@ class HetNetEnvironment(Environment):
         shadow = jax.random.normal(jax.random.PRNGKey(0), distance.shape) * self.shadow_std_db
         return pl + shadow
 
+    # def _calculate_sinr(self, state, power, interference):
+    #     """Calculate SINR at each user."""
+    #     distances = jnp.linalg.norm(
+    #         state['bs_positions'][:, None] - state['user_positions'][None, :],
+    #         axis=-1
+    #     )
+    #     path_loss = self._calculate_path_loss(distances)
+    #     received_signals = power[:, None] - path_loss
+    #     best_signal = jnp.max(received_signals, axis=0)
+    #     best_signal_linear = 10 ** (best_signal / 10)
+    #     noise_linear = 10 ** (self.noise_floor_dbm / 10)
+    #     sinr_linear = best_signal_linear / (interference + noise_linear)
+    #     return 10 * jnp.log10(sinr_linear + 1e-6)
+    
+    # def _calculate_throughput(self, allocations, sinr):
+    #     """Calculate throughput using the Shannon-Hartley theorem."""
+    #     sinr_linear = 10 ** (sinr / 10)
+    #     throughput = allocations * jnp.log2(1 + sinr_linear)
+    #     return jnp.sum(throughput)
+
     def _calculate_sinr(self, state, power, interference):
-        """Calculate SINR at each user."""
         distances = jnp.linalg.norm(
-            state['bs_positions'][:, None] - state['user_positions'][None, :],
-            axis=-1
-        )
+            state['bs_positions'][:, None] - state['user_positions'][None, :], axis=-1)
         path_loss = self._calculate_path_loss(distances)
         received_signals = power[:, None] - path_loss
         best_signal = jnp.max(received_signals, axis=0)
         best_signal_linear = 10 ** (best_signal / 10)
         noise_linear = 10 ** (self.noise_floor_dbm / 10)
-        sinr_linear = best_signal_linear / (interference + noise_linear)
-        return 10 * jnp.log10(sinr_linear + 1e-6)
+        interference_safe = jnp.clip(interference, 0.0, None)  # Prevent negative interference
+        sinr_linear = best_signal_linear / (interference_safe + noise_linear + 1e-6)
+        return 10 * jnp.log10(jnp.clip(sinr_linear, 1e-6, None))  # Clip SINR to avoid log(0)
     
     def _calculate_throughput(self, allocations, sinr):
-        """Calculate throughput using the Shannon-Hartley theorem."""
-        sinr_linear = 10 ** (sinr / 10)
-        throughput = allocations * jnp.log2(1 + sinr_linear)
+        sinr_linear = jnp.clip(10 ** (sinr / 10), 0.0, None)  # Ensure non-negative
+        throughput = allocations * jnp.log2(1 + sinr_linear + 1e-6)  # Add epsilon
         return jnp.sum(throughput)
-    
+
+    # def _calculate_reward(self, throughput, power):
+    #     """Multi-objective reward that encourages high throughput, penalizes high power, and rewards fairness."""
+    #     throughput_reward = throughput
+    #     power_penalty = jnp.sum(power) * 0.1
+    #     fairness = throughput / (jnp.sum(power) + 1e-3)
+    #     return throughput_reward - power_penalty + fairness
+
     def _calculate_reward(self, throughput, power):
-        """Multi-objective reward that encourages high throughput, penalizes high power, and rewards fairness."""
-        throughput_reward = throughput
-        power_penalty = jnp.sum(power) * 0.1
-        fairness = throughput / (jnp.sum(power) + 1e-3)
-        return throughput_reward - power_penalty + fairness
-  
+        throughput_reward = jnp.clip(throughput, 0.0, 1000.0)  # Lower cap based on realistic throughput
+        power_penalty = jnp.sum(power) * 0.01  # Reduce from 0.1 to 0.01
+        fairness = throughput_reward / (jnp.sum(power) + 1e-3) * 10.0  # Scale fairness
+        reward = throughput_reward - power_penalty + fairness
+        return jnp.where(jnp.isnan(reward), 0.0, reward)
+
     def observation_spec(self):
         total_length = (self.num_macro_bs + self.num_small_bs) + self.num_users + \
                        (self.num_macro_bs + self.num_small_bs) * self.num_users + \

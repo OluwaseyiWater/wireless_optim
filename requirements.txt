@@ -1,7 +1,6 @@
-jumanji
 jax==0.5.0
 jaxlib==0.5.0
-haiku
-optax
 dm-haiku
+jumanji
+optax
 RLax
