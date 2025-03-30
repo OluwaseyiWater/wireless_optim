@@ -37,6 +37,18 @@ def ppo_network_fn(obs, action_dim, hidden_size):
         hk.Linear(hidden_size), jax.nn.relu,
         hk.Linear(hidden_size), jax.nn.relu,
         hk.Linear(hidden_size), jax.nn.relu,
+        hk.Linear(hidden_size), jax.nn.relu,
+        hk.Linear(hidden_size), jax.nn.relu,
+        hk.Linear(hidden_size), jax.nn.relu,
+        hk.Linear(hidden_size), jax.nn.relu,
+        hk.Linear(hidden_size), jax.nn.relu,
+        hk.Linear(hidden_size), jax.nn.relu,
+        hk.Linear(hidden_size), jax.nn.relu,
+        hk.Linear(hidden_size), jax.nn.relu,
+        hk.Linear(hidden_size), jax.nn.relu,
+        hk.Linear(hidden_size), jax.nn.relu,
+        hk.Linear(hidden_size), jax.nn.relu,
+        hk.Linear(hidden_size), jax.nn.relu,
     ])
     hidden = mlp(obs)
     #logits = hk.Linear(action_dim)(hidden)
