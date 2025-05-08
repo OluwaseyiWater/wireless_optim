@@ -4,3 +4,4 @@ dm-haiku
 jumanji
 optax
 RLax
+hydra-core

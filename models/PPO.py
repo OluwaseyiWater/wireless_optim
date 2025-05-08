@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import List, Dict
 import os
 from utils import unflatten_action
+import wandb
 
 # Create directory for plots
 os.makedirs("plots", exist_ok=True)
@@ -145,7 +146,15 @@ def ppo_network_fn(obs, action_dim, hidden_size):
 
 #     return params, ppo_net, epoch_rewards, epoch_losses
 
-def ppo_train(env, config, seed=0):
+def ppo_train(
+       env,
+       config,
+       seed: int = 0,
+       use_wandb: bool = True,
+       wandb_project: str = "ppo-training",
+       wandb_name: str = None,
+    ):
+    
     action_shape = env.action_spec().shape
     action_dim = int(np.prod(action_shape))
     num_bs = action_shape[0]
@@ -156,6 +165,15 @@ def ppo_train(env, config, seed=0):
         return ppo_network_fn(obs, action_dim, hidden_size)
     ppo_net = hk.without_apply_rng(hk.transform(forward_fn))
     key = jax.random.PRNGKey(seed)
+    global_step = 0
+
+     # ——— WandB init ———
+    if use_wandb:
+        wandb.init(
+            project=wandb_project,
+            name=wandb_name,
+            config={**config, "seed": seed})
+    
     dummy_obs = jnp.zeros((obs_dim,))
     params = ppo_net.init(key, dummy_obs)
     optimizer = optax.chain(optax.clip_by_global_norm(1.0), optax.adam(config['lr']))
@@ -212,9 +230,16 @@ def ppo_train(env, config, seed=0):
 
     epoch_rewards = []
     epoch_losses = []
+    epoch_powers = []
+    epoch_bandwidths = []
+    epoch_schedules = []
 
     for epoch in range(config['num_epochs']):
         observations, actions, rewards, dones, log_probs, values = [], [], [], [], [], []
+        power_adjustments = []
+        bandwidth_allocations = []
+        scheduling_scores = []
+        
         key, subkey = jax.random.split(key)
         state = env.reset(subkey)
         ep_reward = 0.0
@@ -230,12 +255,33 @@ def ppo_train(env, config, seed=0):
             action_flat = mu + sigma * jax.random.normal(subkey, shape=mu.shape)
             action_flat = jnp.clip(action_flat, 0.0, 1.0)
             action = action_flat.reshape(num_bs, 3)
+            
+             # — log action components to W&B — 
+            if use_wandb:
+                pa = np.array(action[:, 0])
+                ba = np.array(action[:, 1])
+                ss = np.array(action[:, 2])
+                wandb.log({
+                    "ppo/power_adjustments":     wandb.Histogram(pa),
+                    "ppo/bandwidth_allocations": wandb.Histogram(ba),
+                    "ppo/scheduling_scores":     wandb.Histogram(ss),
+                    "ppo/pa_mean":               pa.mean(),
+                    "ppo/ba_mean":               ba.mean(),
+                    "ppo/ss_mean":               ss.mean(),
+                    "global_step":               global_step,
+                }, step=global_step)
+            global_step += 1
+
             actions.append(action)
             log_prob = jax.scipy.stats.norm.logpdf(action_flat, mu, sigma).sum()
             log_probs.append(float(log_prob))
             values.append(np.array(value))
             state = env.step(action)
             rewards.append(state.reward)
+            power_adjustments.append(action[:, 0])
+            bandwidth_allocations.append(action[:, 1])
+            scheduling_scores.append(action[:, 2])
+            
             dones.append(1.0 if state.discount == 0 else 0.0)
             ep_reward += state.reward
             if state.discount == 0:
@@ -247,6 +293,8 @@ def ppo_train(env, config, seed=0):
         values.append(np.array(last_value))
         advantages, returns = compute_gae(norm_rewards, np.array(values), np.array(dones), 
                                          config['gamma'], config['gae_lambda'])
+        
+
 
         for _ in range(config['update_epochs']):
             loss, grads = jax.value_and_grad(ppo_loss)(params, jnp.array(observations), 
@@ -254,12 +302,37 @@ def ppo_train(env, config, seed=0):
                                                        advantages, returns)
             updates, opt_state = optimizer.update(grads, opt_state)
             params = optax.apply_updates(params, updates)
-
+        jax.clear_caches()
         epoch_rewards.append(ep_reward)
         epoch_losses.append(loss)
+        epoch_powers.append(np.array(power_adjustments))
+        epoch_bandwidths.append(np.array(bandwidth_allocations))
+        epoch_schedules.append(np.array(scheduling_scores))
+        
         print(f"PPO Epoch {epoch}: Reward = {ep_reward:.2f}, Loss = {loss:.4f}")
 
-    return params, ppo_net, epoch_rewards, epoch_losses
+# — log epoch metrics to W&B —
+        if use_wandb:
+            wandb.log({
+                "ppo/epoch":         epoch,
+                "ppo/total_reward":  ep_reward,
+                "ppo/epoch_loss":    float(loss),
+            }, step=global_step)
+
+    if use_wandb:
+        best_reward = max(epoch_rewards)
+        avg_reward  = sum(epoch_rewards) / len(epoch_rewards)
+        best_loss   = min(epoch_losses)
+        avg_loss    = sum(epoch_losses)  / len(epoch_losses)
+        
+        wandb.run.summary["best_reward"] = best_reward
+        wandb.run.summary["avg_reward"]  = avg_reward
+        wandb.run.summary["best_loss"]   = best_loss
+        wandb.run.summary["avg_loss"]    = avg_loss
+
+        wandb.finish()
+
+    return params, ppo_net, epoch_rewards, epoch_losses, epoch_powers, epoch_bandwidths, epoch_schedules
 
 def ppo_agent(config):
     env = HetNetEnvironment(**config)

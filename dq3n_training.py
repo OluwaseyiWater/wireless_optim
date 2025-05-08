@@ -1,128 +1,53 @@
-# import os
-# import pickle
-# from models.D3QN import train_d3qn, D3QN
-# from wireless_optim.environment import HetNetEnvironment
-# #parse parameters    
-# import argparse
-# from flax import serialization
-
-# parser = argparse.ArgumentParser()
-# parser.add_argument("--num_macro_bs", type=int, default=3)
-# parser.add_argument("--num_small_bs", type=int, default=10)
-# parser.add_argument("--num_users", type=int, default=50)
-# parser.add_argument("--max_steps", type=int, default=100)
-# parser.add_argument("--train_seed", type=int, default=0)
-# parser.add_argument("--num_episodes", type=int, default=5)
-# parser.add_argument("--batch_size", type=int, default=1000)
-# parser.add_argument("--replay_capacity", type=int, default=100000)
-
-# args = parser.parse_args()
-# num_macro_bs = args.num_macro_bs
-# num_small_bs = args.num_small_bs
-# num_users = args.num_users
-# max_steps = args.max_steps
-# train_seed = args.train_seed
-# num_episodes = args.num_episodes
-# batch_size = args.batch_size
-# replay_capacity = args.replay_capacity
-
-# def main():
-#     env = HetNetEnvironment(num_macro_bs=num_macro_bs, num_small_bs=num_small_bs,
-#                     num_users=num_users, max_steps=max_steps)
-
-#     print("\nStarting D3QN training...")
-#     d3qn_agent, d3qn_rewards, d3qn_losses = train_d3qn(env, num_episodes=num_episodes, 
-#                 batch_size=batch_size, replay_capacity=replay_capacity
-#                 ,seed=train_seed)
-#     print("D3QN training completed.")
-
-#     #save model
-#     if not os.path.exists("train_models"):
-#         os.makedirs("train_models")
-#     with open("train_models/d3qn_agent.pkl", "wb") as f:
-#         f.write(serialization.to_bytes(d3qn_agent.params))
-
-#     #save rewards
-#     with open("train_models/d3qn_rewards.pkl", "wb") as f:
-#         pickle.dump(d3qn_rewards, f)
-
-#     #save parameters
-#     with open("train_models/d3qn_params.pkl", "wb") as f:
-#         param_dict = {
-#             "num_macro_bs": num_macro_bs,
-#             "num_small_bs": num_small_bs,
-#             "num_users": num_users,
-#             "max_steps": max_steps,
-#             "train_seed": train_seed,
-#             "num_episodes": num_episodes,
-#             "batch_size": batch_size,
-#             "replay_capacity": replay_capacity
-#         }
-#         pickle.dump(param_dict, f)
-
-#     with open("train_models/env_d3qn.pkl", "wb") as f:
-#         env_dict = {
-#             "num_macro_bs": num_macro_bs,
-#             "num_small_bs": num_small_bs,
-#             "num_users": num_users,
-#             "max_steps": max_steps,
-#         }
-
-#         pickle.dump(env_dict, f)
-        
-#     print("D3QN model and rewards saved.")
-
-# if __name__ == "__main__":
-#     main()
-
 
 import os
 import pickle
-from models.D3QN import train_d3qn, D3QN
-from wireless_optim.environment import HetNetEnvironment
-#parse parameters    
-import argparse
+import hydra
+from omegaconf import DictConfig
 from flax import serialization
+from models.D3QN import train_d3qn
+from wireless_optim.environment import HetNetEnvironment
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--num_macro_bs", type=int, default=3)
-parser.add_argument("--num_small_bs", type=int, default=10)
-parser.add_argument("--num_users", type=int, default=50)
-parser.add_argument("--max_steps", type=int, default=100)
-parser.add_argument("--train_seed", type=int, default=0)
-parser.add_argument("--num_episodes", type=int, default=100)
-parser.add_argument("--batch_size", type=int, default=256)
-parser.add_argument("--replay_capacity", type=int, default=10000)
-
-args = parser.parse_args()
-
-def main():
+@hydra.main(version_base=None, config_path="conf", config_name="config")
+def main(cfg: DictConfig):
+    # Create environment
     env = HetNetEnvironment(
-        num_macro_bs=args.num_macro_bs,
-        num_small_bs=args.num_small_bs,
-        num_users=args.num_users,
-        max_steps=args.max_steps
+        num_macro_bs=cfg.num_macro_bs,
+        num_small_bs=cfg.num_small_bs,
+        num_users=cfg.num_users,
+        max_steps=cfg.max_steps
     )
 
     print("\nStarting D3QN training...")
-    d3qn_agent, d3qn_rewards, d3qn_losses = train_d3qn(
+    # Train agent
+    d3qn_agent, d3qn_rewards, d3qn_losses,  episode_powers, episode_bandwidths, episode_scheds = train_d3qn(
         env,
-        num_episodes=args.num_episodes,
-        batch_size=args.batch_size,
-        replay_capacity=args.replay_capacity,
-        seed=args.train_seed
+        num_episodes=cfg.num_episodes,
+        batch_size=cfg.batch_size,
+        replay_capacity=cfg.replay_capacity,
+        seed=cfg.train_seed,
+        lr=cfg.lr
     )
     print("D3QN training completed.")
 
-    # Save the model and results
-    if not os.path.exists("train_models"):
-        os.makedirs("train_models")
-    with open("train_models/d3qn_agent.pkl", "wb") as f:
+    # Save outputs to original working directory
+    out_dir = os.path.join(hydra.utils.get_original_cwd(), "train_models")
+    os.makedirs(out_dir, exist_ok=True)
+
+    # Save model parameters
+    with open(os.path.join(out_dir, "d3qn_agent.pkl"), "wb") as f:
         f.write(serialization.to_bytes(d3qn_agent.params))
-    with open("train_models/d3qn_rewards.pkl", "wb") as f:
+        
+    # Save rewards & losses
+    with open(os.path.join(out_dir, "d3qn_rewards.pkl"), "wb") as f:
         pickle.dump(d3qn_rewards, f)
-    with open("train_models/d3qn_losses.pkl", "wb") as f:
+    with open(os.path.join(out_dir, "d3qn_losses.pkl"), "wb") as f:
         pickle.dump(d3qn_losses, f)
+    with open(os.path.join(out_dir, "episode_powers.pkl"), "wb") as f:
+        pickle.dump(episode_powers, f)
+    with open(os.path.join(out_dir, "episode_bandwidths.pkl"), "wb") as f:
+        pickle.dump(episode_bandwidths, f)
+    with open(os.path.join(out_dir, "episode_scheds.pkl"), "wb") as f:
+        pickle.dump(episode_scheds, f)
 
 if __name__ == "__main__":
     main()
