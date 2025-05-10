@@ -11,21 +11,21 @@ from wireless_optim.environment import HetNetEnvironment
 def main(cfg: DictConfig):
     # Create environment
     env = HetNetEnvironment(
-        num_macro_bs=cfg.num_macro_bs,
-        num_small_bs=cfg.num_small_bs,
-        num_users=cfg.num_users,
-        max_steps=cfg.max_steps
+        num_macro_bs=cfg.env.num_macro_bs,
+        num_small_bs=cfg.env.num_small_bs,
+        num_users=cfg.env.num_users,
+        max_steps=cfg.env.max_steps
     )
 
     print("\nStarting D3QN training...")
     # Train agent
     d3qn_agent, d3qn_rewards, d3qn_losses,  episode_powers, episode_bandwidths, episode_scheds = train_d3qn(
         env,
-        num_episodes=cfg.num_episodes,
-        batch_size=cfg.batch_size,
-        replay_capacity=cfg.replay_capacity,
-        seed=cfg.train_seed,
-        lr=cfg.lr
+        num_episodes=cfg.d3qn.num_episodes,
+        batch_size=cfg.d3qn.batch_size,
+        replay_capacity=cfg.d3qn.replay_capacity,
+        seed=cfg.training.seed,
+        lr=cfg.d3qn.lr
     )
     print("D3QN training completed.")
 
