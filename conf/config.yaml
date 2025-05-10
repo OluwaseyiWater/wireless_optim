@@ -1,0 +1,7 @@
+defaults:
+  - env: default
+  - ppo: default
+  - d3qn: default
+
+training:
+  seed: 42

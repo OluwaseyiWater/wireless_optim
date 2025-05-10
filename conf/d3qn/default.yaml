@@ -1,0 +1,9 @@
+num_macro_bs: 3
+num_small_bs: 10
+num_users: 50
+max_steps: 100
+train_seed: 0
+num_episodes: 100
+batch_size: 256
+replay_capacity: 10000
+lr: 3e-4

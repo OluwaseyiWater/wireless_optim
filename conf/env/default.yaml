@@ -1,0 +1,4 @@
+num_macro_bs: 3
+num_small_bs: 10
+num_users: 50
+max_steps: 1000
