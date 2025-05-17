@@ -1,3 +1,7 @@
+import os
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]   = "false"
+os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"]  = "0.5"
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -5,23 +9,24 @@ import haiku as hk
 import optax
 import matplotlib.pyplot as plt
 from dataclasses import dataclass
-import os
-from utils import unflatten_action
 from jax import tree_util
 import wandb
 from typing import Any, Tuple, List
 
-from wireless_optim.environment import *
+# Assuming environment is available (HetNetEnvironment)
+# from wireless_optim.environment import *
 
+# Assuming utils.py contains unflatten_action if used
+# from utils import unflatten_action
 
 # Define a Transition dataclass to hold experience data
-@dataclass
+@dataclass(frozen=True)
 class Transition:
-    obs: jnp.ndarray          # Current observation
-    action_indices: jnp.ndarray  # Discrete action indices for each base station (BS)
-    reward: float             # Reward received
-    next_obs: jnp.ndarray     # Next observation
-    done: float               # Done flag (1.0 if terminal, 0.0 otherwise)
+    obs: jnp.ndarray
+    action_indices: jnp.ndarray
+    reward: float
+    next_obs: jnp.ndarray
+    done: float
 
 tree_util.register_pytree_node(
     Transition,
@@ -29,183 +34,306 @@ tree_util.register_pytree_node(
     lambda _, children: Transition(*children)
 )
 
-# Simple replay buffer to store transitions
+# Optimized Replay Buffer using NumPy arrays
 class ReplayBuffer:
-    def __init__(self, capacity: int):
+    # Replay buffer using pre-allocated NumPy arrays for efficient storage.
+    def __init__(self, capacity: int, obs_shape: Tuple[int, ...], action_indices_shape: Tuple[int, ...]):
         self.capacity = capacity
-        self.buffer = []
+        flat_obs_dim = int(np.prod(obs_shape))
+        self.obs_buffer = np.empty((capacity, flat_obs_dim), dtype=np.float32)
+        self.action_indices_buffer = np.empty((capacity, *action_indices_shape), dtype=np.int32)
+        self.reward_buffer = np.empty(capacity, dtype=np.float32)
+        self.next_obs_buffer = np.empty((capacity, flat_obs_dim), dtype=np.float32)
+        self.done_buffer = np.empty(capacity, dtype=np.float32)
+
         self.position = 0
+        self.size = 0
 
     def add(self, transition: Transition):
-        if len(self.buffer) < self.capacity:
-            self.buffer.append(transition)
-        else:
-            self.buffer[self.position] = transition
+        self.obs_buffer[self.position] = np.asarray(transition.obs).flatten()
+        self.action_indices_buffer[self.position] = np.asarray(transition.action_indices)
+        self.reward_buffer[self.position] = np.asarray(transition.reward)
+        self.next_obs_buffer[self.position] = np.asarray(transition.next_obs).flatten()
+        self.done_buffer[self.position] = np.asarray(transition.done)
+
         self.position = (self.position + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
 
     def sample(self, batch_size: int, key: jax.random.PRNGKey):
-        indices = jax.random.choice(key, len(self.buffer), shape=(batch_size,), replace=False)
-        batch = [self.buffer[int(idx)] for idx in indices]
-        obs = jnp.stack([t.obs for t in batch])
-        action_indices = jnp.stack([jnp.reshape(t.action_indices, (-1,)) for t in batch])
-        rewards = jnp.array([t.reward for t in batch])
-        next_obs = jnp.stack([t.next_obs for t in batch])
-        dones = jnp.array([t.done for t in batch])
-        return Transition(obs, action_indices, rewards, next_obs, dones)
+        indices = jax.random.choice(key, self.size, shape=(batch_size,), replace=False)
+        indices_np = np.asarray(indices)
 
+        batch_obs = self.obs_buffer[indices_np]
+        batch_action_indices = self.action_indices_buffer[indices_np]
+        batch_rewards = self.reward_buffer[indices_np]
+        batch_next_obs = self.next_obs_buffer[indices_np]
+        batch_dones = self.done_buffer[indices_np]
+
+        return Transition(
+            obs=jax.device_put(batch_obs),
+            action_indices=jax.device_put(batch_action_indices),
+            reward=jax.device_put(batch_rewards),
+            next_obs=jax.device_put(batch_next_obs),
+            done=jax.device_put(batch_dones),
+        )
+
+    def __len__(self):
+        return self.size
+
+# D3QN Agent
 class D3QN:
-    def __init__(self, obs_dim, num_bs, action_dims_per_bs=3, num_bins_per_dimension=2, lr=3e-4, gamma=0.99):
-        """
-        Initialize the D3QN agent.
-
-        Args:
-            obs_dim (int): Dimension of the observation space.
-            num_bs (int): Number of base stations (e.g., 13 for 3 macro + 10 small).
-            action_dims_per_bs (int): Number of action dimensions per BS (e.g., 3 for power, bandwidth, scheduling).
-            num_bins_per_dimension (int): Number of discrete bins per action dimension (e.g., 2 for 0.0 and 1.0).
-            lr (float): Learning rate (default matches PPO at 3e-4).
-            gamma (float): Discount factor.
-        """
+    # Dueling Deep Q-Network agent for discrete action spaces.
+    def __init__(self, obs_dim: int, num_bs: int, action_dims_per_bs: int = 3, num_bins_per_dimension: int = 2, lr: float = 3e-4, gamma: float = 0.99):
         self.num_bs = num_bs
         self.action_dims_per_bs = action_dims_per_bs
         self.num_bins_per_dimension = num_bins_per_dimension
-        self.num_actions_per_bs = num_bins_per_dimension ** action_dims_per_bs  # e.g., 2^3 = 8
-        self.total_action_dim = self.num_bs * self.num_actions_per_bs  # e.g., 13 * 8 = 104
+        self.num_actions_per_bs = num_bins_per_dimension ** action_dims_per_bs
+        self.total_action_dim = self.num_bs * self.num_actions_per_bs
         self.gamma = gamma
-        self.obs_dim = obs_dim
 
-        # Define the dueling Q-network architecture
-        def q_network(x):
+        def q_network_fn(x):
             hidden = hk.Sequential([
                 hk.Linear(128), jax.nn.relu,
-                hk.Linear(128), jax.nn.relu,
-                hk.Linear(128), jax.nn.relu,
-                hk.Linear(64), jax.nn.relu,
-                hk.Linear(64), jax.nn.relu,
                 hk.Linear(64), jax.nn.relu,
                 hk.Linear(32), jax.nn.relu,
                 hk.Linear(32), jax.nn.relu,
             ])(x)
-            value = hk.Linear(1)(hidden)  # State value: (batch_size, 1)
-            advantages = hk.Linear(self.num_bs * self.num_actions_per_bs)(hidden)  # Advantages: (batch_size, 104)
-            advantages = advantages.reshape(-1, self.num_bs, self.num_actions_per_bs)  # (batch_size, 13, 8)
-            mean_advantages = jnp.mean(advantages, axis=-1, keepdims=True)  # (batch_size, 13, 1)
-            q_values = value[:, None, None] + (advantages - mean_advantages)  # (batch_size, 13, 8)
+            value = hk.Linear(1)(hidden)
+            advantages = hk.Linear(self.num_bs * self.num_actions_per_bs)(hidden)
+            advantages_reshaped = advantages.reshape(-1, self.num_bs, self.num_actions_per_bs)
+            mean_advantages = jnp.mean(advantages_reshaped, axis=-1, keepdims=True)
+            q_values = value[:, None, None] + (advantages_reshaped - mean_advantages)
             return q_values
 
-        # Initialize the network and optimizer
-        self.net = hk.without_apply_rng(hk.transform(q_network))
+        self.net = hk.without_apply_rng(hk.transform(q_network_fn))
         self.optimizer = optax.chain(
-            optax.clip_by_global_norm(1.0),  
+            optax.clip_by_global_norm(1.0),
             optax.adam(lr)
         )
+
         key = jax.random.PRNGKey(0)
-        dummy_obs = jnp.zeros((self.obs_dim,))
+        dummy_obs = jnp.zeros((1, obs_dim))
         self.params = self.net.init(key, dummy_obs)
-        self.target_params = self.params  # Initialize target network with same params
+        self.target_params = self.params
         self.opt_state = self.optimizer.init(self.params)
 
-    def _d3qn_loss(self, params, target_params, transitions: Transition):
-        """
-        Compute the D3QN loss.
+    @staticmethod
+    def d3qn_loss(
+        params, target_params, transitions: Transition,
+        net_apply_fn, gamma_val: float, num_bs_val: int, num_actions_per_bs_val: int
+    ):
+        # Compute the D3QN loss.
+        q3  = net_apply_fn(params, transitions.obs)
+        q3t = net_apply_fn(target_params, transitions.next_obs)
 
-        Args:
-            params: Current network parameters.
-            target_params: Target network parameters.
-            transitions: Batch of transitions.
-
-        Returns:
-            float: Mean squared error loss.
-        """
-        # (1) get the 3‑D Q: (batch, num_bs, num_actions_per_bs)
-        q3  = self.net.apply(params,        transitions.obs)
-        q3t = self.net.apply(target_params, transitions.next_obs)
-    
-        # (2) flatten the last two dims into one global action‑dim
         batch_size = q3.shape[0]
-        q_flat  = q3.reshape(batch_size, -1)   # (batch, num_bs*num_actions_per_bs)
-        qf_flat = q3t.reshape(batch_size, -1)  # same
-    
-        # (3) flatten the multi‑dim action_indices into a single integer per sample
-        muls = (self.num_actions_per_bs ** jnp.arange(self.num_bs))[None, :]  # (1, num_bs)
-        flat_idx = jnp.sum(transitions.action_indices * muls, axis=1)         # (batch,)
-    
-        # (4) now use the original 2‑D indexing
+        q_flat  = q3.reshape(batch_size, -1)
+        qf_flat = q3t.reshape(batch_size, -1)
+
+        powers = jnp.arange(num_bs_val -1, -1, -1)
+        muls = (num_actions_per_bs_val ** powers)
+        flat_idx = jnp.sum(transitions.action_indices * muls, axis=1)
+
         batch_idx = jnp.arange(batch_size)
         q_selected = q_flat[batch_idx, flat_idx]
         next_best  = jnp.max(qf_flat, axis=1)
-        target_q   = transitions.reward + (1-transitions.done)*self.gamma*next_best
-    
-        loss = jnp.mean(optax.huber_loss(q_selected, target_q, delta=1.0))
+        target_q   = transitions.reward + (1.0 - transitions.done) * gamma_val * next_best
+
+        loss = jnp.mean(optax.huber_loss(q_selected, jax.lax.stop_gradient(target_q), delta=1.0))
         return loss
-        
-    def update(self, batch: Transition):
-        """
-        Update the Q-network parameters using a batch of transitions.
 
-        Args:
-            batch: Batch of transitions.
+    # CORRECTED: Define the training step as a static method inside the class
+    @staticmethod
+    def train_step(
+        params, opt_state, target_params, transitions: Transition, key, global_step_jax,
+        net_apply_fn, optimizer_update_fn, gamma_val: float, num_bs_val: int,
+        num_actions_per_bs_val: int, tau_val: float, target_update_freq_val: int # Corrected: target_update_freq_val is int
+    ):
+        # Calculate loss
+        loss, grads = jax.value_and_grad(D3QN.d3qn_loss)(
+            params, target_params, transitions,
+            net_apply_fn, gamma_val, num_bs_val, num_actions_per_bs_val
+        )
 
-        Returns:
-            float: Loss value for the update step.
-        """
-        loss_value, grads = jax.value_and_grad(self._d3qn_loss)(self.params, self.target_params, batch)
-        updates, self.opt_state = self.optimizer.update(grads, self.opt_state)
-        self.params = optax.apply_updates(self.params, updates)
-        return loss_value
+        # Apply gradients
+        updates, new_opt_state = optimizer_update_fn(grads, opt_state, params)
+        new_params = optax.apply_updates(params, updates)
 
-    def update_target_network(self):
-        """Update the target network parameters to match the current network."""
-        self.target_params = self.params
+        # Soft/Hard target update logic
+        # CORRECTED: Convert target_update_freq_val (int) to JAX array inside the JIT function
+        target_update_condition = (global_step_jax % jnp.array(target_update_freq_val, dtype=jnp.int32)) == 0
 
+        def soft_update(current_p, target_p, t):
+             return jax.tree.map(lambda tp, p: t * p + (1.0 - t) * tp, target_p, current_p)
 
-def indices_to_actions(action_indices, num_bs, num_actions_per_bs=8):
-    """
-    Convert discrete action indices to continuous actions (e.g., 0.0 or 1.0).
+        def hard_update(current_p):
+            return current_p
 
-    Args:
-        action_indices: Array of discrete action indices for each BS (shape: (num_bs,)).
-        num_bs: Number of base stations.
-        num_actions_per_bs: Number of discrete actions per BS (e.g., 8 for 2^3).
+        updated_target_params = jax.lax.cond(
+            tau_val < 1.0,
+            lambda: soft_update(new_params, target_params, tau_val),
+            lambda: jax.lax.cond(
+                 target_update_condition,
+                 lambda: hard_update(new_params),
+                 lambda: target_params
+            )
+        )
 
-    Returns:
-        jnp.ndarray: Continuous actions (shape: (num_bs, action_dims_per_bs)).
-    """
-    actions = []
-    for idx in action_indices:
-        # Convert index to binary representation (assuming 3 dimensions per BS)
-        binary = [(idx >> i) & 1 for i in range(3)]  # e.g., idx=5 -> [1, 0, 1]
-        actions.append(jnp.array(binary, dtype=jnp.float32))
-    return jnp.stack(actions)  # (num_bs, 3)
+        return new_params, new_opt_state, updated_target_params, loss, key
 
 
+# Helper function for decoding discrete indices to continuous actions
+def indices_to_actions(action_indices, num_bs, num_bins_per_dimension, action_dims_per_bs):
+    # Convert discrete action indices (shape (num_bs,)) to continuous actions (shape (num_bs, action_dims_per_bs)).
+    def decode_single_index(idx):
+        decoded_actions = []
+        current_idx = idx
+        for dim in range(action_dims_per_bs):
+            dim_idx = current_idx % num_bins_per_dimension
+            continuous_val = dim_idx / (num_bins_per_dimension - 1.0) if num_bins_per_dimension > 1 else float(dim_idx)
+            decoded_actions.append(continuous_val)
+            current_idx = current_idx // num_bins_per_dimension
+        return jnp.array(decoded_actions[::-1], dtype=jnp.float32)
+
+    decoded_actions_vmap = jax.vmap(decode_single_index)(action_indices)
+    return decoded_actions_vmap
+
+# Main training function
 def train_d3qn(
     env: Any,
     num_episodes: int = 100,
     batch_size: int = 256,
-    replay_capacity: int = 10000,
+    replay_capacity: int = 100000,
     seed: int = 0,
-    lr= 1e-7,
+    lr: float = 3e-4,
+    gamma: float = 0.99,
+    target_update_freq: int = 10,
+    tau: float = 1.0,
+    warmup_steps: int = 10000,
+    epsilon_start: float = 1.0,
+    epsilon_end: float = 0.01,
+    epsilon_decay_steps: int = 100000,
     wandb_project: str = "d3qn-training",
     wandb_name: str = None,
     use_wandb: bool = True,
-) -> Tuple["D3QN", List[float], List[float]]:
-    # ——— Setup agent & buffer ———
-    obs_dim = int(np.prod(env.observation_spec().shape))
-    num_bs  = env.action_spec().shape[0]
-    agent   = D3QN(obs_dim, num_bs, lr= lr, gamma=0.99)
-    buffer  = ReplayBuffer(capacity=replay_capacity)
-    key     = jax.random.PRNGKey(seed)
+) -> Tuple[D3QN, List[float], List[float], List[float], List[float], List[float]]:
 
-    # JIT the update functions once
-    def update_fn(params, opt_state, target_params, transitions):
-        loss, grads = jax.value_and_grad(agent._d3qn_loss)(params, target_params, transitions)
-        updates, new_opt_state = agent.optimizer.update(grads, opt_state)
-        new_params = optax.apply_updates(params, updates)
-        return new_params, new_opt_state, loss
-        
-    compiled_update = jax.jit(update_fn)
-    compiled_update_target = jax.jit(agent.update_target_network)
+    # --- Setup Environment & Agent ---
+    obs_spec = env.observation_spec()
+    action_spec = env.action_spec()
+
+    obs_dim = int(np.prod(obs_spec.shape))
+    num_bs, action_dims_per_bs = action_spec.shape
+    num_bins_per_dimension = 2
+    num_actions_per_bs = num_bins_per_dimension ** action_dims_per_bs
+
+    agent = D3QN(
+        obs_dim=obs_dim,
+        num_bs=num_bs,
+        action_dims_per_bs=action_dims_per_bs,
+        num_bins_per_dimension=num_bins_per_dimension,
+        lr=lr,
+        gamma=gamma
+    )
+
+    # --- Setup Replay Buffer ---
+    buffer = ReplayBuffer(
+        capacity=replay_capacity,
+        obs_shape=obs_spec.shape,
+        action_indices_shape=(num_bs,)
+    )
+
+    key = jax.random.PRNGKey(seed)
+    global_step = 0
+
+    if use_wandb:
+        run = wandb.init(
+            project=wandb_project,
+            name=wandb_name,
+            config={
+                "algorithm": "D3QN",
+                "num_episodes":    num_episodes,
+                "batch_size":      batch_size,
+                "replay_capacity": replay_capacity,
+                "warmup_steps":    warmup_steps,
+                "lr":              lr,
+                "gamma":           gamma,
+                "seed":            seed,
+                "target_update_freq": target_update_freq,
+                "tau":             tau,
+                "epsilon_start":   epsilon_start,
+                "epsilon_end":     epsilon_end,
+                "epsilon_decay_steps": epsilon_decay_steps,
+                "env_obs_dim": obs_dim,
+                "env_num_bs": num_bs,
+                "env_action_dims_per_bs": action_dims_per_bs,
+                "agent_num_actions_per_bs": agent.num_actions_per_bs,
+            }
+        )
+        if wandb_name is None:
+             run.name = f"D3QN_seed{seed}"
+             wandb.run.name = run.name
+
+    print("Starting D3QN training...", flush=True)
+
+    # --- JIT Training Step ---
+    # CORRECTED: JIT the static method D3QN.train_step
+    compiled_train_step = jax.jit(
+        D3QN.train_step, # <-- Reference the static method
+        static_argnames=[
+             'net_apply_fn', 'optimizer_update_fn', 'gamma_val', 'num_bs_val',
+             'num_actions_per_bs_val', 'tau_val', 'target_update_freq_val', # target_update_freq_val is Python int
+        ]
+    )
+
+    # Pass these values as static args when calling compiled_train_step
+    net_apply_fn_static = agent.net.apply
+    optimizer_update_fn_static = agent.optimizer.update
+    gamma_val_static = agent.gamma # Use agent's gamma
+    num_bs_val_static = agent.num_bs
+    num_actions_per_bs_val_static = agent.num_actions_per_bs
+    tau_val_static = tau
+    target_update_freq_val_static = target_update_freq # Use the Python int
+
+    # --- Pre-fill replay buffer with random actions (warm-up) ---
+    print(f"Warm-up: collecting {warmup_steps} random transitions...")
+    current_warmup_steps = 0
+    warmup_key = jax.random.fold_in(key, 1000)
+    key, _ = jax.random.split(key)
+
+    while current_warmup_steps < warmup_steps:
+        warmup_key, reset_key = jax.random.split(warmup_key)
+        ts = env.reset(reset_key)
+        obs = ts.observation
+        done = bool(ts.discount == 0.0)
+
+        while not done and current_warmup_steps < warmup_steps:
+            warmup_key, akey = jax.random.split(warmup_key)
+            rand_idx = jax.random.randint(akey, (num_bs,), 0, agent.num_actions_per_bs)
+
+            action = indices_to_actions(
+                rand_idx, num_bs,
+                num_bins_per_dimension=num_bins_per_dimension,
+                action_dims_per_bs=action_dims_per_bs
+            )
+
+            ts2 = env.step(action)
+            next_obs = ts2.observation
+            done = bool(ts2.discount == 0.0)
+            reward = float(ts2.reward)
+
+            buffer.add(Transition(
+                obs=obs.flatten(),
+                action_indices=rand_idx,
+                reward=jnp.clip(reward, -1e3, 1e3) / 1e3,
+                next_obs=next_obs.flatten(),
+                done=ts2.discount
+            ))
+            obs = next_obs
+            current_warmup_steps += 1
+            global_step += 1
+
+    print(f"Warm-up complete. Buffer size: {len(buffer)}\n")
 
     episode_rewards: List[float] = []
     episode_losses:  List[float] = []
@@ -213,101 +341,64 @@ def train_d3qn(
     episode_bandwidths = []
     episode_scheds = []
 
-    min_replay  = 2000
-    global_step = 0
-
-    # ——— WandB Init ———
-    if use_wandb:
-        wandb.init(
-            project=wandb_project,
-            name=wandb_name,
-            config={
-                "num_episodes":    num_episodes,
-                "batch_size":      batch_size,
-                "replay_capacity": replay_capacity,
-                "min_replay_size": min_replay,
-                "lr":              1e-5,
-                "gamma":           0.99,
-                "seed":            seed
-            }
-        )
-
-    print("Starting D3QN training...", flush=True)
-
-    # ——— Pre-fill replay buffer with random actions (warm-up) ———
-    print(f"Warm-up: collecting {min_replay} random transitions...")
-    while len(buffer.buffer) < min_replay:
-        key, subkey = jax.random.split(key)
-        ts = env.reset(subkey)
-        done = False
-        while not done and len(buffer.buffer) < min_replay:
-            # random discrete indices per BS
-            key, akey = jax.random.split(key)
-            rand_idx = jax.random.randint(akey, (num_bs,), 0, agent.num_actions_per_bs)
-            action = indices_to_actions(rand_idx, num_bs)
-            ts2 = env.step(action)
-
-            # store transition
-            buffer.add(Transition(
-                obs=ts.observation.flatten(),
-                action_indices=rand_idx,
-                reward=float(ts2.reward) / 1000.0,
-                next_obs=ts2.observation.flatten(),
-                done=1.0 if ts2.discount == 0 else 0.0
-            ))
-            done = bool(ts2.discount == 0)
-            ts = ts2
-    print("Warm-up complete.\n")
-
-    # ——— Training Loop ———
     for ep in range(num_episodes):
         key, reset_key = jax.random.split(key)
         ts = env.reset(reset_key)
         obs = ts.observation
-        done = False
+        done = bool(ts.discount == 0.0)
 
         ep_reward = 0.0
         ep_loss   = 0.0
-        updates   = 0
+        train_steps_in_episode = 0
 
         power_means:     List[float] = []
         bandwidth_means: List[float] = []
         sched_means:     List[float] = []
 
         while not done:
-            key, akey = jax.random.split(key)
-            epsilon = max(0.01, 0.1 * (0.98 ** ep))
+            key, akey, sample_key = jax.random.split(key, 3)
 
-            # — pick action indices — 
+            # --- Action Selection (Epsilon-Greedy) ---
+            epsilon = max(epsilon_end, epsilon_start - (epsilon_start - epsilon_end) * (global_step / epsilon_decay_steps))
+
             if jax.random.uniform(akey) < epsilon:
                 action_idx = jax.random.randint(
                     akey, (num_bs,), 0, agent.num_actions_per_bs
                 )
             else:
-                qvals = agent.net.apply(agent.params, obs)
-                # flatten + global argmax, then decode per-BS
-                q_flat     = qvals.reshape((-1,))
-                global_idx = int(jnp.argmax(q_flat))
-                one_hot    = unflatten_action(global_idx, (num_bs, agent.num_actions_per_bs))
-                action_idx = jnp.argmax(one_hot, axis=1)
+                qvals = agent.net.apply(agent.params, obs.flatten()[None, :])
+                q_flat = qvals.reshape((num_bs * agent.num_actions_per_bs,))
+                global_flat_idx = jnp.argmax(q_flat)
 
-            # — build continuous action — 
-            action = indices_to_actions(action_idx, num_bs)
+                action_idx_list = []
+                current_global_idx = global_flat_idx
+                for i in range(num_bs):
+                    bs_idx = current_global_idx % agent.num_actions_per_bs
+                    action_idx_list.append(bs_idx)
+                    current_global_idx = current_global_idx // agent.num_actions_per_bs
+                action_idx = jnp.array(action_idx_list[::-1], dtype=jnp.int32)
 
-            # — record action stats — 
+            # — build continuous action for the environment —
+            action = indices_to_actions(
+                action_idx, num_bs,
+                num_bins_per_dimension=num_bins_per_dimension,
+                action_dims_per_bs=action_dims_per_bs
+            )
+
+            # — record action stats (using continuous actions for env) —
             pa = np.array(action[:, 0]); power_means.append(pa.mean())
             ba = np.array(action[:, 1]); bandwidth_means.append(ba.mean())
             ss = np.array(action[:, 2]); sched_means.append(ss.mean())
 
-            # — step environment — 
+            # — step environment —
             ts2 = env.step(action)
             next_obs = ts2.observation
-            done     = bool(ts2.discount == 0)
+            done     = bool(ts2.discount == 0.0)
             reward   = float(ts2.reward)
 
-            # — W&B per-step logs — 
+            # — W&B per-step logs —
             if use_wandb:
-                wandb.log({
+                log_dict = {
                     "env/power_adjustments":     wandb.Histogram(pa),
                     "env/bandwidth_allocations": wandb.Histogram(ba),
                     "env/scheduling_scores":     wandb.Histogram(ss),
@@ -315,64 +406,80 @@ def train_d3qn(
                     "env/ba_mean":               ba.mean(),
                     "env/ss_mean":               ss.mean(),
                     "global_step":               global_step,
-                }, step=global_step)
+                    "metrics/reward_per_step":   reward,
+                    "agent/epsilon":             epsilon,
+                    "buffer_size":               len(buffer),
+                }
+                wandb.log(log_dict, step=global_step)
             global_step += 1
 
-            # — store transition — 
+            # — store transition —
             buffer.add(Transition(
                 obs=obs.flatten(),
                 action_indices=action_idx,
-                reward= jnp.clip((reward), -1e3, 1e3) / 1e3,
+                reward=jnp.clip(reward, -1e3, 1e3) / 1e3,
                 next_obs=next_obs.flatten(),
-                done=1.0 if done else 0.0
+                done=ts2.discount
             ))
+
             obs = next_obs
             ep_reward += reward
 
-            # — update via compiled JIT after warm-up — 
-            key, skey = jax.random.split(key)
-            batch = buffer.sample(batch_size, skey)
-            agent.params, agent.opt_state, loss = compiled_update(
-                agent.params, agent.opt_state, agent.target_params, batch
-            )
-            ep_loss += float(loss)
-            updates += 1
+            # --- Train the Agent (if buffer is large enough) ---
+            if len(buffer) >= batch_size:
+                batch = buffer.sample(batch_size, sample_key)
 
-            tau = 0.005
-            agent.target_params = jax.tree_map(
-                lambda t, s: t * (1 - tau) + s * tau,
-                agent.target_params,
-                agent.params,
-            )
+                # CORRECTED: Call the compiled staticmethod with correct static args
+                agent.params, agent.opt_state, agent.target_params, loss, key = compiled_train_step(
+                    agent.params, agent.opt_state, agent.target_params, batch, key,
+                    jnp.array(global_step, dtype=jnp.int32), # Dynamic global_step
+                    # Static Arguments (matched by name in static_argnames)
+                    net_apply_fn=net_apply_fn_static,
+                    optimizer_update_fn=optimizer_update_fn_static,
+                    gamma_val=gamma_val_static,
+                    num_bs_val=num_bs_val_static,
+                    num_actions_per_bs_val=num_actions_per_bs_val_static,
+                    tau_val=tau_val_static,
+                    target_update_freq_val=target_update_freq_val_static, # Pass the Python int static arg
+                )
+
+                ep_loss += float(loss)
+                train_steps_in_episode += 1
+
+                # W&B training logs (per training step)
+                if use_wandb:
+                    wandb.log({
+                        "train/loss": float(loss),
+                        "global_step": global_step,
+                    }, step=global_step)
 
         # end of episode
-        avg_loss = ep_loss / max(updates, 1)
+        avg_loss = ep_loss / max(train_steps_in_episode, 1)
+
         episode_rewards.append(ep_reward)
         episode_losses.append(avg_loss)
-        episode_powers.append(np.mean(power_means))
-        episode_bandwidths.append(np.mean(bandwidth_means))
-        episode_scheds.append(np.mean(sched_means))
+        episode_powers.append(np.mean(power_means) if power_means else 0.0)
+        episode_bandwidths.append(np.mean(bandwidth_means) if bandwidth_means else 0.0)
+        episode_scheds.append(np.mean(sched_means) if sched_means else 0.0)
 
-        if ep % 10 == 0:
-            compiled_update_target()
+        jax.clear_caches()
 
-            
+        print(f"Episode {ep}: Reward={ep_reward:.2f}, AvgLoss={avg_loss:.4f}, Steps={global_step}")
 
-        print(f"Episode {ep}: Reward={ep_reward:.2f}, AvgLoss={avg_loss:.4f}")
-
+        # W&B episode logs
         if use_wandb:
             wandb.log({
                 "episode":                ep,
                 "total_reward":           ep_reward,
-                "avg_loss":               avg_loss,
+                "episode_avg_loss":       avg_loss,
                 "epsilon":                epsilon,
-                "updates":                updates,
-                "mean_power_adjust":      np.mean(power_means),
-                "mean_bandwidth_alloc":   np.mean(bandwidth_means),
-                "mean_scheduling_score":  np.mean(sched_means),
+                "train_steps_in_episode": train_steps_in_episode,
+                "mean_power_adjust":      np.mean(power_means) if power_means else 0.0,
+                "mean_bandwidth_alloc":   np.mean(bandwidth_means) if bandwidth_means else 0.0,
+                "mean_scheduling_score":  np.mean(sched_means) if sched_means else 0.0,
             }, step=global_step)
 
     if use_wandb:
         wandb.finish()
 
-    return agent, episode_rewards, episode_losses,  episode_powers, episode_bandwidths, episode_scheds
+    return agent, episode_rewards, episode_losses, episode_powers, episode_bandwidths, episode_scheds
