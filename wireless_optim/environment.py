@@ -139,26 +139,6 @@ class HetNetEnvironment(Environment):
         shadow = jax.random.normal(jax.random.PRNGKey(0), distance.shape) * self.shadow_std_db
         return pl + shadow
 
-    # def _calculate_sinr(self, state, power, interference):
-    #     """Calculate SINR at each user."""
-    #     distances = jnp.linalg.norm(
-    #         state['bs_positions'][:, None] - state['user_positions'][None, :],
-    #         axis=-1
-    #     )
-    #     path_loss = self._calculate_path_loss(distances)
-    #     received_signals = power[:, None] - path_loss
-    #     best_signal = jnp.max(received_signals, axis=0)
-    #     best_signal_linear = 10 ** (best_signal / 10)
-    #     noise_linear = 10 ** (self.noise_floor_dbm / 10)
-    #     sinr_linear = best_signal_linear / (interference + noise_linear)
-    #     return 10 * jnp.log10(sinr_linear + 1e-6)
-    
-    # def _calculate_throughput(self, allocations, sinr):
-    #     """Calculate throughput using the Shannon-Hartley theorem."""
-    #     sinr_linear = 10 ** (sinr / 10)
-    #     throughput = allocations * jnp.log2(1 + sinr_linear)
-    #     return jnp.sum(throughput)
-
     def _calculate_sinr(self, state, power, interference):
         distances = jnp.linalg.norm(
             state['bs_positions'][:, None] - state['user_positions'][None, :], axis=-1)
@@ -176,12 +156,6 @@ class HetNetEnvironment(Environment):
         throughput = allocations * jnp.log2(1 + sinr_linear + 1e-6)  # Add epsilon
         return jnp.sum(throughput)
 
-    # def _calculate_reward(self, throughput, power):
-    #     """Multi-objective reward that encourages high throughput, penalizes high power, and rewards fairness."""
-    #     throughput_reward = throughput
-    #     power_penalty = jnp.sum(power) * 0.1
-    #     fairness = throughput / (jnp.sum(power) + 1e-3)
-    #     return throughput_reward - power_penalty + fairness
 
     def _calculate_reward(self, throughput, power):
         throughput_reward = jnp.clip(throughput, 0.0, 1000.0)  # Lower cap based on realistic throughput
@@ -221,16 +195,3 @@ class Transition:
     reward: float
     next_obs: jnp.ndarray
     done: float
-
-
-# Example usage
-# if __name__ == "__main__":
-#     env = HetNetEnvironment()
-#     key = jax.random.PRNGKey(0)
-#     timestep = env.reset(key)
-    
-#     # Run for a few steps using random actions from the action spec
-#     for step in range(10):
-#         action = env.action_spec().generate_value()
-#         timestep = env.step(action)
-#         print(f"Step {step}: Reward {timestep.reward:.2f}")
