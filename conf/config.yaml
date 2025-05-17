@@ -4,4 +4,6 @@ defaults:
   - d3qn: default
 
 training:
+  num_episodes: 500
+  batch_size: 256
   seed: 42
