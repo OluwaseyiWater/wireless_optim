@@ -59,7 +59,6 @@ def ppo_network_fn(obs, action_dim, hidden_size):
     value = hk.Linear(1)(hidden)
     return mu, log_sigma, jnp.squeeze(value, axis=-1)
 
-
 def ppo_train(
        env,
        config,
