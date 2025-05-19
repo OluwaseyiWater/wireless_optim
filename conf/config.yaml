@@ -2,6 +2,7 @@ defaults:
   - env: default
   - ppo: default
   - d3qn: default
+  - td3: default
 
 training:
   num_episodes: 500
