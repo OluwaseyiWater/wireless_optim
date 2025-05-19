@@ -13,7 +13,7 @@ buffer:
   per_alpha: 0.6
   per_beta_start: 0.4
   per_beta_frames: 200000 # Anneal beta towards 1.0 over this many global steps
-  warmup_steps: 10000
+  warmup_steps: 5000
 
 wandb:
   use: True # Set to False to disable WandB logging
