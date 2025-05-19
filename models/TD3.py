@@ -1,5 +1,7 @@
 import os
+# don’t grab all GPU/host RAM at startup
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"]   = "false"
+# only use e.g. 50% of GPU or host RAM for JAX buffers
 os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"]  = "0.5"
 
 import jax
@@ -239,7 +241,8 @@ class TD3Agent:
         target_q = jnp.min(jnp.concatenate([target_q1, target_q2], axis=-1), axis=-1, keepdims=True)
 
         bellman_target = reward[:, None] + gamma * (1.0 - done[:, None]) * target_q
-        
+
+        # CORRECTED: Define separate loss functions for each critic
         def critic1_loss_fn(c1_params):
             q1 = critic1_apply_fn(c1_params, obs, action)
             is_weights_reshaped = batch_is_weights[:, None]
@@ -304,6 +307,7 @@ class TD3Agent:
                       actor_loss)
          )
 
+        # CORRECTED: Return updated critic opt states
         return (new_actor_params, new_critic1_params, new_critic2_params,
                 new_target_actor_params, new_target_critic1_params, new_target_critic2_params,
                 new_actor_opt_state, new_critic1_opt_state, new_critic2_opt_state,
@@ -365,6 +369,7 @@ def train_td3(
     global_step = 0
     per_beta_increase = (1.0 - per_beta_start) / per_beta_frames
 
+    # CORRECTED: JIT the staticmethod and provide static args
     # batch_indices is not needed in JIT, removed from static_argnames
     compiled_train_step = jax.jit(
         TD3Agent.train_step,
@@ -601,3 +606,4 @@ def train_td3(
         wandb.finish()
 
     return agent, episode_rewards, episode_actor_losses, episode_critic_losses, episode_powers, episode_bandwidths, episode_scheds
+
