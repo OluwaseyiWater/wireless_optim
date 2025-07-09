@@ -1,21 +1,17 @@
+num_episodes: 500
+batch_size: 256
 agent:
-  lr_actor: 1e-4
-  lr_critic: 3e-4
+  lr_actor: 3e-4
+  lr_critic: 1e-4
   gamma: 0.99
   tau: 0.005
   policy_noise: 0.2
   noise_clip: 0.5
   policy_delay: 2
   action_noise_std: 0.1
-
 buffer:
   replay_capacity: 100000
   per_alpha: 0.6
   per_beta_start: 0.4
-  per_beta_frames: 200000 # Anneal beta towards 1.0 over this many global steps
+  per_beta_frames: 200000
   warmup_steps: 5000
-
-wandb:
-  use: True # Set to False to disable WandB logging
-  project: "td3-per-hetnet" # Your WandB project name
-  name: null
