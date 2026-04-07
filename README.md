@@ -1,6 +1,6 @@
 This repository contains code for our paper on the optimisation of resource allocation in heterogeneous wireless networks using deep reinforcement learning. The code is designed to optimise resource allocation in a dynamic wireless environment with changing network conditions and user demands.
 
-This project explores the application of deep reinforcement learning (DRL) for dynamic resource allocation in wireless communication systems. An environment simulates a heterogeneous network with path loss fading and log-normal shadowing. DRL algorithms, such as TD3 and PPO, are used to optimise resource allocation, demonstrating improved efficiency over heuristic baselines. For more details, refer to the [paper](./paper/aims_project.pdf). Note that the paper is submitted to the IEEE Wireless Communication and Networking Conference, 2026, for presentation.
+This project explores the application of deep reinforcement learning (DRL) for dynamic resource allocation in wireless communication systems. An environment simulates a heterogeneous network with path loss fading and log-normal shadowing. DRL algorithms, such as TD3 and PPO, are used to optimise resource allocation, demonstrating improved efficiency over heuristic baselines. For more details, refer to the [paper](./paper/conference_latex_template%20(4).pdf). Note that the paper is submitted to the IEEE Wireless Communication and Networking Conference, 2026, for presentation.
 
 ## Installation
 
